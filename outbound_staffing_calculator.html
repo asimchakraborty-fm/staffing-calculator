@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Outbound Staffing Model V1 (Fairmoney)</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      background: linear-gradient(to bottom right, #ecfdf5, #d1fae5);
+      min-height: 100vh;
+      padding: 20px;
+      color: #111827;
+    }
+
+    .container {
+      max-width: 1000px;
+      margin: auto;
+      background: #fff;
+      padding: 28px;
+      border-radius: 12px;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.08);
+    }
+
+    h1 { font-size: 26px; margin: 0 0 10px 0; color: #0f172a; }
+    h2 { font-size: 18px; margin: 18px 0 10px 0; color: #0f172a; }
+
+    label { display:block; font-size:14px; font-weight:600; margin-bottom:6px; color:#374151; }
+    input[type="number"] { width:100%; padding:10px 12px; border-radius:8px; border:1px solid #d1d5db; font-size:14px; box-sizing:border-box; margin-bottom:10px; }
+
+    .two-col { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px; }
+    .muted { font-size:13px; color:#6b7280; margin-bottom:6px; }
+
+    button { background:#059669; color:#fff; border:none; padding:12px 16px; border-radius:8px; font-weight:700; cursor:pointer; width:100%; margin-top:8px; }
+    button:hover { background:#047857; }
+
+    .results { margin-top:18px; }
+
+    .card { padding:18px; border-radius:10px; margin-bottom:12px; color:#fff; }
+    .card-main { background: linear-gradient(135deg,#6366f1,#8b5cf6); }
+
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px; }
+    .small-card { background:#f9fafb; padding:14px; border-radius:8px; color:#111827; }
+    .small-card .label { font-size:12px; color:#475569; }
+    .small-card .value { font-size:20px; font-weight:700; margin-top:6px; }
+
+    .occupancy-good { color: #065f46; font-weight:700; }
+    .occupancy-bad { color: #7f1d1d; font-weight:700; }
+
+    .note { background:#fef9c3; border-left:4px solid #facc15; padding:10px; font-size:14px; color:#78350f; margin-top:12px; border-radius:6px; }
+
+    @media (max-width:520px) { .grid { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <div class="container" role="main">
+    <h1>Outbound Staffing Model V1 (Fairmoney)</h1>
+
+    <h2>Input Parameters</h2>
+
+    <div class="two-col">
+      <div>
+        <label for="monthlyVolume">Monthly Volume (Calls)</label>
+        <input id="monthlyVolume" type="number" value="20000" min="0" />
+        <div class="muted">Total call attempts planned for the month.</div>
+      </div>
+
+      <div>
+        <label for="workingDays">Working Days in Month</label>
+        <input id="workingDays" type="number" value="22" min="1" />
+        <div class="muted">Divide monthly volume by this to get daily load.</div>
+      </div>
+
+      <div>
+        <label for="avgHandleTime">Average Handle Time (seconds)</label>
+        <input id="avgHandleTime" type="number" value="300" min="0" step="1" />
+        <div class="muted">Time per connected call including wrap-up.</div>
+      </div>
+
+      <div>
+        <label for="connectRate">Connect Rate (%)</label>
+        <input id="connectRate" type="number" value="30" min="0" max="100" />
+        <div class="muted">Percent of attempts that connect to a person.</div>
+      </div>
+
+      <div>
+        <label for="hoursPerDay">Hours Per Day Per Agent (shift)</label>
+        <input id="hoursPerDay" type="number" value="8" min="0" step="0.5" />
+        <div class="muted">Enter total scheduled hours per agent per day.</div>
+      </div>
+
+      <div>
+        <label for="breakTrainingMinutes">Break + Training + Briefing (minutes)</label>
+        <input id="breakTrainingMinutes" type="number" value="60" min="0" />
+        <div class="muted">Fixed minutes per day lost to breaks, training, meetings.</div>
+      </div>
+
+      <div>
+        <label for="attrition">Attrition (%)</label>
+        <input id="attrition" type="number" value="5" min="0" max="100" />
+        <div class="muted">Expected headcount loss; used to inflate required hires.</div>
+      </div>
+
+      <div>
+        <label for="occupancy">Target Occupancy (%)</label>
+        <input id="occupancy" type="number" value="85" min="0" max="100" />
+      </div>
+
+      <div>
+        <label for="buffer">Buffer Capacity (%)</label>
+        <input id="buffer" type="number" value="10" min="0" max="100" />
+      </div>
+    </div>
+
+    <div style="margin-top:12px;">
+      <button id="calcBtn">Calculate Staffing</button>
+    </div>
+
+    <div class="results" id="results" aria-live="polite"></div>
+  </div>
+
+  <script>
+    function calculateStaffing() {
+      // ---- read inputs ----
+      const monthlyVolume = Number(document.getElementById('monthlyVolume').value) || 0;
+      const workingDays = Number(document.getElementById('workingDays').value) || 1;
+      const avgHandleTime = Number(document.getElementById('avgHandleTime').value) || 0; // seconds
+      const connectRate = Number(document.getElementById('connectRate').value) || 0; // %
+      const hoursPerDay = Number(document.getElementById('hoursPerDay').value) || 0;
+      const breakTrainingMinutes = Number(document.getElementById('breakTrainingMinutes').value) || 0;
+      const attritionPct = Number(document.getElementById('attrition').value) || 0;
+      const occupancyPct = Number(document.getElementById('occupancy').value) || 0; // target
+      const bufferPct = Number(document.getElementById('buffer').value) || 0;
+
+      // ---- daily volume & connected calls ----
+      const dailyVolume = workingDays > 0 ? (monthlyVolume / workingDays) : monthlyVolume;
+      const effectiveCallsPerDay = (dailyVolume * connectRate) / 100;
+
+      // ---- workload (time) ----
+      const avgHandleTimeMinutes = avgHandleTime / 60; // sec -> min
+      const totalMinutesNeeded = effectiveCallsPerDay * avgHandleTimeMinutes;
+      const totalHoursNeeded = totalMinutesNeeded / 60;
+
+      // ---- effective hours per agent (after breaks/training) ----
+      const effectiveHoursPerAgent = Math.max(0, hoursPerDay - (breakTrainingMinutes / 60));
+      // productive hours after applying target occupancy
+      const productiveHoursPerAgent = effectiveHoursPerAgent * (occupancyPct / 100);
+
+      // ---- base agents required (before attrition) ----
+      const baseAgentsNeeded = productiveHoursPerAgent > 0
+        ? Math.ceil(totalHoursNeeded / productiveHoursPerAgent)
+        : 0;
+
+      // ---- adjust for attrition by inflating headcount ----
+      const attritionMultiplier = attritionPct >= 100 ? Infinity : 1 / (1 - (attritionPct / 100));
+      const agentsAfterAttrition = attritionMultiplier === Infinity
+        ? baseAgentsNeeded
+        : Math.ceil(baseAgentsNeeded * attritionMultiplier);
+
+      // ---- buffer and final agents ----
+      const bufferAgents = Math.ceil(agentsAfterAttrition * (bufferPct / 100));
+      const agentsNeeded = agentsAfterAttrition + bufferAgents;
+
+      // ---- per-agent workload & actual occupancy (realised) ----
+      const callsPerAgent = agentsAfterAttrition > 0 ? Math.floor(effectiveCallsPerDay / agentsAfterAttrition) : 0;
+      const actualOccupancy = (effectiveHoursPerAgent > 0 && agentsAfterAttrition > 0)
+        ? ((totalHoursNeeded / agentsAfterAttrition) / effectiveHoursPerAgent * 100)
+        : 0;
+      const actualOccupancyFixed = Number(actualOccupancy).toFixed(1);
+
+      // ---- occupancy comparison class ----
+      const occupancyClass = actualOccupancy <= occupancyPct ? 'occupancy-good' : 'occupancy-bad';
+      const occupancyNote = actualOccupancy <= occupancyPct
+        ? 'Within target'
+        : 'Above target — consider adding more staff or lowering target';
+
+      // ---- render results ----
+      const resultsEl = document.getElementById('results');
+      resultsEl.innerHTML = `
+        <div class="card card-main" role="region" aria-label="Primary results">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <h3 style="margin:0 0 6px 0">Total Agents Required</h3>
+              <div style="font-size:36px;font-weight:800">${agentsNeeded}</div>
+            </div>
+            <div style="text-align:right; font-size:13px; color:rgba(255,255,255,0.95)">Model V1</div>
+          </div>
+          <div style="margin-top:8px; color:rgba(255,255,255,0.95)">
+            Base: ${baseAgentsNeeded} &nbsp;&nbsp;|&nbsp;&nbsp; Post-Attrition: ${agentsAfterAttrition} &nbsp;&nbsp;|&nbsp;&nbsp; Buffer: ${bufferAgents}
+          </div>
+        </div>
+
+        <div class="grid" role="region" aria-label="Breakdown">
+          <div class="small-card"><div class="label">Monthly Volume</div><div class="value">${monthlyVolume.toLocaleString()}</div></div>
+          <div class="small-card"><div class="label">Working Days</div><div class="value">${workingDays.toLocaleString()}</div></div>
+
+          <div class="small-card"><div class="label">Daily Volume (used)</div><div class="value">${Math.round(dailyVolume).toLocaleString()}</div></div>
+          <div class="small-card"><div class="label">Connected Calls/Day</div><div class="value">${Math.round(effectiveCallsPerDay).toLocaleString()}</div></div>
+
+          <div class="small-card"><div class="label">Total Hours Needed (per day)</div><div class="value">${totalHoursNeeded.toFixed(1)}</div></div>
+          <div class="small-card"><div class="label">Calls Per Agent (approx)</div><div class="value">${callsPerAgent.toLocaleString()}</div></div>
+
+          <div class="small-card"><div class="label">Avg Handle Time (sec)</div><div class="value">${avgHandleTime}</div></div>
+          <div class="small-card"><div class="label">Effective Hours / Agent (after breaks)</div><div class="value">${effectiveHoursPerAgent.toFixed(2)} hrs</div></div>
+
+          <div class="small-card"><div class="label">Productive Hours / Agent (after occupancy)</div><div class="value">${productiveHoursPerAgent.toFixed(2)} hrs</div></div>
+          <div class="small-card"><div class="label">Target Occupancy</div><div class="value">${occupancyPct}%</div></div>
+
+          <div class="small-card"><div class="label">Actual Occupancy (realised)</div><div class="value ${occupancyClass}">${actualOccupancyFixed}%</div></div>
+          <div class="small-card"><div class="label">Occupancy Note</div><div class="value">${occupancyNote}</div></div>
+
+          <div class="small-card"><div class="label">Break+Training (min)</div><div class="value">${breakTrainingMinutes}</div></div>
+          <div class="small-card"><div class="label">Attrition (%)</div><div class="value">${attritionPct}%</div></div>
+        </div>
+
+        <div class="note" role="note">
+          <strong>Note:</strong>
+          <ul style="margin:6px 0 0 18px; padding:0;">
+            <li><code>effectiveHoursPerAgent = hoursPerDay − (Break+Training minutes ÷ 60)</code></li>
+            <li><code>agentsAfterAttrition = ceil(baseAgentsNeeded ÷ (1 − Attrition%))</code></li>
+            <li>Buffer applied after attrition. Dev: AKC</li>
+          </ul>
+        </div>
+      `;
+    }
+
+    // initial render + wiring
+    document.getElementById('calcBtn').addEventListener('click', calculateStaffing);
+    calculateStaffing();
+  </script>
+</body>
+</html>
